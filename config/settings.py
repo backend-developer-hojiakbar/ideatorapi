@@ -5,8 +5,8 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'dev-secret-key')
-DEBUG = os.environ.get('DEBUG', '1') == '1'
-ALLOWED_HOSTS = ['*']
+DEBUG = False
+ALLOWED_HOSTS = ['ideatorapi.cdcgroup.uz', '142.93.174.235', 'localhost']
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -71,7 +71,9 @@ TIME_ZONE = 'Asia/Tashkent'
 USE_I18N = True
 USE_TZ = True
 
-STATIC_URL = 'static/'
+import os
+STATIC_URL = '/static/'
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
@@ -92,5 +94,8 @@ SIMPLE_JWT = {
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
-
+CORS_ALLOWED_ORIGINS = [
+    "http://ideator.cdcgroup.uz", # Frontend domeningiz
+    "http://142.93.174.235",
+]
 CORS_ALLOW_ALL_ORIGINS = True
