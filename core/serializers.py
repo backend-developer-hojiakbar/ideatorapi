@@ -1,7 +1,7 @@
 from django.contrib.auth import authenticate
 from rest_framework import serializers
 from rest_framework_simplejwt.tokens import RefreshToken
-from .models import User, IdeaConfiguration, Project, ListedProject, Notification, TopUpTransaction
+from .models import User, IdeaConfiguration, Project, ListedProject, Notification, TopUpTransaction, Partner, Promocode, PromocodeUsage
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -9,7 +9,7 @@ class RegisterSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ['id', 'phone_number', 'password']
+        fields = ['id', 'phone_number', 'password', 'full_name', 'workplace']
 
     def create(self, validated_data):
         password = validated_data.pop('password')
@@ -40,7 +40,7 @@ class PhoneTokenObtainPairSerializer(serializers.Serializer):
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ['id', 'phone_number', 'balance', 'is_subscribed', 'date_joined']
+        fields = ['id', 'phone_number', 'full_name', 'workplace', 'balance', 'is_subscribed', 'date_joined']
 
 
 class IdeaConfigurationSerializer(serializers.ModelSerializer):
@@ -80,8 +80,40 @@ class NotificationSerializer(serializers.ModelSerializer):
 
 class TopUpSerializer(serializers.Serializer):
     amount = serializers.DecimalField(max_digits=12, decimal_places=2)
+    promo_code = serializers.CharField(required=False, allow_blank=True)
 
-    def validate_amount(self, value):
-        if value <= 0:
-            raise serializers.ValidationError('Amount must be positive')
-        return value
+    def validate(self, attrs):
+        amount = attrs.get('amount')
+        if amount is None or amount <= 0:
+            raise serializers.ValidationError({'amount': 'Amount must be positive'})
+
+        code = attrs.get('promo_code', '').strip()
+        if code:
+            try:
+                promo = Promocode.objects.get(code__iexact=code, is_active=True)
+            except Promocode.DoesNotExist:
+                raise serializers.ValidationError({'promo_code': 'Invalid or inactive promo code'})
+
+            user = self.context.get('request').user
+            if PromocodeUsage.objects.filter(user=user, promocode=promo).exists():
+                raise serializers.ValidationError({'promo_code': 'Promo code already used by this user'})
+
+            attrs['promo'] = promo
+        return attrs
+
+
+class PartnerSerializer(serializers.ModelSerializer):
+    logo_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Partner
+        fields = ['id', 'name', 'short_info', 'contact_person', 'contact_phone', 'website', 'logo_url', 'created_at']
+        read_only_fields = ['created_at']
+
+    def get_logo_url(self, obj):
+        req = self.context.get('request')
+        if obj.logo and hasattr(obj.logo, 'url'):
+            if req:
+                return req.build_absolute_uri(obj.logo.url)
+            return obj.logo.url
+        return None

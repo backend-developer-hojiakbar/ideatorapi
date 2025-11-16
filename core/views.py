@@ -5,11 +5,11 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework_simplejwt.views import TokenObtainPairView
 
-from .models import User, IdeaConfiguration, Project, ListedProject, Notification, TopUpTransaction
+from .models import User, IdeaConfiguration, Project, ListedProject, Notification, TopUpTransaction, Partner
 from .serializers import (
     RegisterSerializer, PhoneTokenObtainPairSerializer, UserSerializer,
     IdeaConfigurationSerializer, ProjectSerializer, ListedProjectSerializer,
-    NotificationSerializer, TopUpSerializer
+    NotificationSerializer, TopUpSerializer, PartnerSerializer
 )
 
 
@@ -121,21 +121,35 @@ class WalletView(generics.GenericAPIView):
     serializer_class = TopUpSerializer
 
     def post(self, request):
-        """Create a pending top-up transaction. Admin approval will credit balance with 1% cashback."""
+        """Create a pending top-up transaction. Admin approval will credit balance with 1% cashback (+ optional promo bonus)."""
         ser = self.get_serializer(data=request.data)
         ser.is_valid(raise_exception=True)
         amount = ser.validated_data['amount']
         user = request.user
         cashback = (amount * Decimal('0.01')).quantize(Decimal('0.01'))
+        promo = ser.validated_data.get('promo')
+        promo_bonus = Decimal('0.00')
+        if promo:
+            promo_bonus = (amount * Decimal(promo.percent) / Decimal('100')).quantize(Decimal('0.01'))
         with transaction.atomic():
-            topup = TopUpTransaction.objects.create(user=user, amount=amount, cashback=cashback, is_active=False)
+            topup = TopUpTransaction.objects.create(
+                user=user,
+                amount=amount,
+                cashback=cashback,
+                promo_code=promo if promo else None,
+                promo_bonus=promo_bonus,
+                is_active=False
+            )
+            message = f"{amount} so'm to'ldirish so'rovi yuborildi. Admin tasdiqlagach balansingizga +{amount} va +{cashback} cashback qo'shiladi."
+            if promo:
+                message += f" Promo: {promo.code} orqali +{promo_bonus} bonus qo'shiladi."
             Notification.objects.create(
                 user=user,
                 type='info',
                 title='Top-up requested',
-                message=f'{amount} so\'m to\'ldirish so\'rovi yuborildi. Admin tasdiqlagach balansingizga +{amount} va +{cashback} cashback qo\'shiladi.'
+                message=message
             )
-        return Response({'transaction_id': topup.id, 'status': 'pending', 'amount': str(amount), 'cashback': str(cashback)})
+        return Response({'transaction_id': topup.id, 'status': 'pending', 'amount': str(amount), 'cashback': str(cashback), 'promo_bonus': str(promo_bonus)})
 
 
 class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
@@ -148,3 +162,11 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
     def mark_read(self, request):
         Notification.objects.filter(user=request.user, read=False).update(read=True)
         return Response({'status': 'ok'})
+
+
+class PartnerViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = PartnerSerializer
+    permission_classes = [permissions.AllowAny]
+
+    def get_queryset(self):
+        return Partner.objects.all().order_by('-created_at')
