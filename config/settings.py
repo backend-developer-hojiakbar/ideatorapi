@@ -5,8 +5,15 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'dev-secret-key')
-DEBUG = False
-ALLOWED_HOSTS = ['ideatorapi.cdcgroup.uz', '142.93.174.235', 'localhost']
+# Enable DEBUG locally by default; set DJANGO_DEBUG=0 in production
+DEBUG = os.environ.get('DJANGO_DEBUG', '1') == '1'
+ALLOWED_HOSTS = [
+    'ideatorapi.cdcgroup.uz',
+    'ideatorapi.pythonanywhere.com',
+    '142.93.174.235',
+    'localhost',
+    '127.0.0.1',
+]
 
 INSTALLED_APPS = [
     'django.contrib.admin',

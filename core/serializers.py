@@ -1,19 +1,49 @@
 from django.contrib.auth import authenticate
+from decimal import Decimal
+import secrets
 from rest_framework import serializers
+from django.conf import settings
+import os
 from rest_framework_simplejwt.tokens import RefreshToken
-from .models import User, IdeaConfiguration, Project, ListedProject, Notification, TopUpTransaction, Partner, Promocode, PromocodeUsage
+from .models import User, IdeaConfiguration, Project, ListedProject, Notification, TopUpTransaction, Partner, Promocode, PromocodeUsage, Announcement
 
 
 class RegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, min_length=8)
+    referral_code = serializers.CharField(write_only=True, required=False, allow_blank=True)
 
     class Meta:
         model = User
-        fields = ['id', 'phone_number', 'password', 'full_name', 'workplace']
+        fields = ['id', 'phone_number', 'password', 'full_name', 'workplace', 'referral_code']
 
     def create(self, validated_data):
+        input_ref = validated_data.pop('referral_code', '').strip()
         password = validated_data.pop('password')
+        # create user first
         user = User.objects.create_user(password=password, **validated_data)
+        # generate unique referral_code for user
+        if not user.referral_code:
+            while True:
+                code = secrets.token_hex(4).upper()  # 8 hex chars
+                if not User.objects.filter(referral_code=code).exists():
+                    user.referral_code = code
+                    user.save(update_fields=['referral_code'])
+                    break
+        # apply referral bonus if valid
+        if input_ref:
+            referrer = User.objects.filter(referral_code__iexact=input_ref).first()
+            if referrer and referrer != user:
+                user.referred_by = referrer
+                user.save(update_fields=['referred_by'])
+                # credit 1000 so'm to referrer
+                referrer.balance = (Decimal(referrer.balance) + Decimal('1000')).quantize(Decimal('0.01'))
+                referrer.save(update_fields=['balance'])
+                Notification.objects.create(
+                    user=referrer,
+                    type='success',
+                    title='Referal bonusi',
+                    message="Do'stingiz ro'yxatdan o'tdi. +1000 so'm qo'shildi."
+                )
         return user
 
 
@@ -38,9 +68,19 @@ class PhoneTokenObtainPairSerializer(serializers.Serializer):
 
 
 class UserSerializer(serializers.ModelSerializer):
+    referrals_count = serializers.SerializerMethodField()
+
     class Meta:
         model = User
-        fields = ['id', 'phone_number', 'full_name', 'workplace', 'balance', 'is_subscribed', 'date_joined']
+        fields = ['id', 'phone_number', 'full_name', 'workplace', 'balance', 'is_subscribed', 'is_investor', 'date_joined', 'referral_code', 'referrals_count']
+
+    def get_referrals_count(self, obj):
+        return obj.referrals.count()
+
+
+class ChangePasswordSerializer(serializers.Serializer):
+    old_password = serializers.CharField(write_only=True)
+    new_password = serializers.CharField(write_only=True, min_length=8)
 
 
 class IdeaConfigurationSerializer(serializers.ModelSerializer):
@@ -112,8 +152,28 @@ class PartnerSerializer(serializers.ModelSerializer):
 
     def get_logo_url(self, obj):
         req = self.context.get('request')
-        if obj.logo and hasattr(obj.logo, 'url'):
+        if obj.logo and hasattr(obj.logo, 'name'):
+            file_path = os.path.join(settings.MEDIA_ROOT, obj.logo.name)
+            if os.path.exists(file_path):
+                url = obj.logo.url
+                if req:
+                    return req.build_absolute_uri(url)
+                return url
+        return None
+
+
+class AnnouncementSerializer(serializers.ModelSerializer):
+    image_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Announcement
+        fields = ['id', 'title', 'body', 'image_url', 'rules_url', 'submission_link', 'deadline', 'tags', 'is_active', 'created_at']
+        read_only_fields = ['created_at', 'is_active']
+
+    def get_image_url(self, obj):
+        req = self.context.get('request')
+        if obj.image and hasattr(obj.image, 'url'):
             if req:
-                return req.build_absolute_uri(obj.logo.url)
-            return obj.logo.url
+                return req.build_absolute_uri(obj.image.url)
+            return obj.image.url
         return None

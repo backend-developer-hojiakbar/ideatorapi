@@ -34,6 +34,9 @@ class User(AbstractBaseUser, PermissionsMixin):
     date_joined = models.DateTimeField(default=timezone.now)
     balance = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     is_subscribed = models.BooleanField(default=False)
+    is_investor = models.BooleanField(default=False)
+    referral_code = models.CharField(max_length=16, unique=True, blank=True, null=True)
+    referred_by = models.ForeignKey('self', null=True, blank=True, on_delete=models.SET_NULL, related_name='referrals')
 
     USERNAME_FIELD = 'phone_number'
     REQUIRED_FIELDS: list[str] = []
@@ -129,3 +132,18 @@ class PromocodeUsage(models.Model):
 
     class Meta:
         unique_together = ('user', 'promocode')
+
+
+class Announcement(models.Model):
+    title = models.CharField(max_length=255)
+    body = models.TextField()
+    image = models.ImageField(upload_to='announcements/', blank=True, null=True)
+    rules_url = models.URLField(blank=True)
+    submission_link = models.URLField(blank=True)
+    deadline = models.DateTimeField(blank=True, null=True)
+    tags = models.JSONField(default=list, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self) -> str:
+        return self.title

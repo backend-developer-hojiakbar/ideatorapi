@@ -4,22 +4,22 @@ from django.utils import timezone
 from django.utils.html import format_html
 from decimal import Decimal
 from django.db import transaction
-from .models import User, IdeaConfiguration, Project, ListedProject, Notification, TopUpTransaction, Partner, Promocode, PromocodeUsage
+from .models import User, IdeaConfiguration, Project, ListedProject, Notification, TopUpTransaction, Partner, Promocode, PromocodeUsage, Announcement
 
 
 @admin.register(User)
 class UserAdmin(BaseUserAdmin):
     model = User
-    list_display = ("id", "phone_number", "full_name", "workplace", "balance", "is_active", "is_staff", "date_joined")
-    list_filter = ("is_active", "is_staff")
+    list_display = ("id", "phone_number", "full_name", "workplace", "balance", "is_investor", "is_active", "is_staff", "date_joined")
+    list_filter = ("is_active", "is_staff", "is_investor")
     ordering = ("-date_joined",)
     search_fields = ("phone_number",)
 
     fieldsets = (
         (None, {"fields": ("phone_number", "password", "full_name", "workplace")}),
-        ("Permissions", {"fields": ("is_active", "is_staff", "is_superuser", "groups", "user_permissions")}),
+        ("Permissions", {"fields": ("is_active", "is_staff", "is_superuser", "is_investor", "groups", "user_permissions")}),
         ("Important dates", {"fields": ("last_login", "date_joined")}),
-        ("Wallet", {"fields": ("balance", "is_subscribed")}),
+        ("Wallet", {"fields": ("balance", "is_subscribed", "referral_code", "referred_by")}),
     )
     add_fieldsets = (
         (None, {
@@ -138,3 +138,10 @@ class PromocodeAdmin(admin.ModelAdmin):
     list_display = ("id", "code", "percent", "is_active", "created_at")
     search_fields = ("code",)
     list_filter = ("is_active", "created_at")
+
+
+@admin.register(Announcement)
+class AnnouncementAdmin(admin.ModelAdmin):
+    list_display = ("id", "title", "is_active", "deadline", "created_at")
+    list_filter = ("is_active", "created_at", "deadline")
+    search_fields = ("title",)

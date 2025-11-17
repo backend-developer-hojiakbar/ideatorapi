@@ -1,15 +1,16 @@
 from decimal import Decimal
+import secrets
 from django.db import transaction
 from rest_framework import generics, permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework_simplejwt.views import TokenObtainPairView
 
-from .models import User, IdeaConfiguration, Project, ListedProject, Notification, TopUpTransaction, Partner
+from .models import User, IdeaConfiguration, Project, ListedProject, Notification, TopUpTransaction, Partner, Announcement
 from .serializers import (
     RegisterSerializer, PhoneTokenObtainPairSerializer, UserSerializer,
     IdeaConfigurationSerializer, ProjectSerializer, ListedProjectSerializer,
-    NotificationSerializer, TopUpSerializer, PartnerSerializer
+    NotificationSerializer, TopUpSerializer, PartnerSerializer, AnnouncementSerializer, ChangePasswordSerializer
 )
 
 
@@ -36,6 +37,38 @@ class MeView(generics.RetrieveAPIView):
 
     def get_object(self):
         return self.request.user
+
+
+class ChangePasswordView(generics.GenericAPIView):
+    serializer_class = ChangePasswordSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        ser = self.get_serializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        user = request.user
+        old_password = ser.validated_data['old_password']
+        new_password = ser.validated_data['new_password']
+        if not user.check_password(old_password):
+            return Response({'detail': 'Eski parol noto\'g\'ri'}, status=400)
+        user.set_password(new_password)
+        user.save(update_fields=['password'])
+        return Response({'status': 'ok'})
+
+
+class GenerateReferralView(generics.GenericAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        if not user.referral_code:
+            while True:
+                code = secrets.token_hex(4).upper()
+                if not User.objects.filter(referral_code=code).exists():
+                    user.referral_code = code
+                    user.save(update_fields=['referral_code'])
+                    break
+        return Response({'referral_code': user.referral_code})
 
 
 class IdeaConfigurationViewSet(viewsets.ModelViewSet):
@@ -106,6 +139,8 @@ class ListedProjectViewSet(viewsets.ModelViewSet):
     def list(self, request, *args, **kwargs):
         """Public listing endpoint: show all listings if ?all=1 else only own."""
         if request.query_params.get('all') == '1':
+            if not request.user.is_authenticated or not getattr(request.user, 'is_investor', False):
+                return Response({'detail': 'Investor huquqi talab qilinadi'}, status=403)
             qs = ListedProject.objects.select_related('project', 'project__owner').all().order_by('-created_at')
         else:
             qs = self.get_queryset().order_by('-created_at')
@@ -170,3 +205,12 @@ class PartnerViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         return Partner.objects.all().order_by('-created_at')
+
+
+class AnnouncementViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = AnnouncementSerializer
+    permission_classes = [permissions.AllowAny]
+
+    def get_queryset(self):
+        qs = Announcement.objects.filter(is_active=True).order_by('-created_at')
+        return qs
