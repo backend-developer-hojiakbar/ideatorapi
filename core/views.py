@@ -15,6 +15,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenObtainPairView
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
+from django.core.cache import cache
 
 from .models import User, IdeaConfiguration, Project, ListedProject, Notification, TopUpTransaction, Partner, Announcement, PromocodeUsage
 from .serializers import (
@@ -258,6 +259,27 @@ class ApproveTopupView(generics.GenericAPIView):
         if not hmac.compare_digest(expected, token):
             return Response({'ok': False, 'error': 'invalid token'}, status=403)
         _approve_topup_transaction(tx)
+        # Try to remove inline buttons if we have cached message info
+        bot_token = getattr(settings, 'TELEGRAM_BOT_TOKEN', None)
+        api_url = f"https://api.telegram.org/bot{bot_token}" if bot_token else None
+        cache_key = f"topup_msg_{tx.id}"
+        info = cache.get(cache_key)
+        if api_url and info:
+            chat_id = info.get('chat_id')
+            message_id = info.get('message_id')
+            if chat_id and message_id:
+                try:
+                    requests.post(
+                        f"{api_url}/editMessageReplyMarkup",
+                        data={
+                            "chat_id": chat_id,
+                            "message_id": message_id,
+                            "reply_markup": json.dumps({"inline_keyboard": []}),
+                        },
+                        timeout=10,
+                    )
+                except Exception:
+                    pass
         return Response({'ok': True, 'status': 'approved'})
 
 
@@ -279,7 +301,27 @@ class RejectTopupView(generics.GenericAPIView):
         expected = hmac.new(secret, msg, hashlib.sha256).hexdigest()
         if not hmac.compare_digest(expected, token):
             return Response({'ok': False, 'error': 'invalid token'}, status=403)
-        # No state change, but respond OK
+        # No state change, but remove inline buttons if possible
+        bot_token = getattr(settings, 'TELEGRAM_BOT_TOKEN', None)
+        api_url = f"https://api.telegram.org/bot{bot_token}" if bot_token else None
+        cache_key = f"topup_msg_{tx.id}"
+        info = cache.get(cache_key)
+        if api_url and info:
+            chat_id = info.get('chat_id')
+            message_id = info.get('message_id')
+            if chat_id and message_id:
+                try:
+                    requests.post(
+                        f"{api_url}/editMessageReplyMarkup",
+                        data={
+                            "chat_id": chat_id,
+                            "message_id": message_id,
+                            "reply_markup": json.dumps({"inline_keyboard": []}),
+                        },
+                        timeout=10,
+                    )
+                except Exception:
+                    pass
         return Response({'ok': True, 'status': 'rejected'})
 
 
@@ -306,6 +348,21 @@ class TelegramWebhookView(APIView):
         api_url = f"https://api.telegram.org/bot{token}" if token else None
         if action == 'approve':
             changed = _approve_topup_transaction(tx)
+            # Remove inline buttons so others can't press again
+            try:
+                message_id = callback.get('message', {}).get('message_id')
+                if api_url and chat_id and message_id:
+                    requests.post(
+                        f"{api_url}/editMessageReplyMarkup",
+                        data={
+                            "chat_id": chat_id,
+                            "message_id": message_id,
+                            "reply_markup": json.dumps({"inline_keyboard": []}),
+                        },
+                        timeout=10,
+                    )
+            except Exception:
+                pass
             if api_url and chat_id:
                 text = f"✅ Tasdiqlandi: Top-up #{tx.id} foydalanuvchi {tx.user.phone_number} uchun faollashtirildi."
                 try:
@@ -314,6 +371,21 @@ class TelegramWebhookView(APIView):
                     pass
             return Response({'ok': True, 'status': 'approved'})
         elif action == 'reject':
+            # Remove inline buttons on reject as well
+            try:
+                message_id = callback.get('message', {}).get('message_id')
+                if api_url and chat_id and message_id:
+                    requests.post(
+                        f"{api_url}/editMessageReplyMarkup",
+                        data={
+                            "chat_id": chat_id,
+                            "message_id": message_id,
+                            "reply_markup": json.dumps({"inline_keyboard": []}),
+                        },
+                        timeout=10,
+                    )
+            except Exception:
+                pass
             if api_url and chat_id:
                 text = f"❌ Rad etildi: Top-up #{tx.id}"
                 try:
@@ -323,6 +395,22 @@ class TelegramWebhookView(APIView):
             return Response({'ok': True, 'status': 'rejected'})
         return Response({'ok': True})
 
+
+class RegisterTopupTelegramMessageView(generics.GenericAPIView):
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        try:
+            tx = int(request.data.get('tx'))
+            chat_id = request.data.get('chat_id')
+            message_id = int(request.data.get('message_id'))
+        except Exception:
+            return Response({'ok': False, 'error': 'invalid payload'}, status=400)
+        if not (tx and chat_id and message_id):
+            return Response({'ok': False, 'error': 'missing fields'}, status=400)
+        cache_key = f"topup_msg_{tx}"
+        cache.set(cache_key, { 'chat_id': chat_id, 'message_id': message_id }, timeout=7*24*3600)
+        return Response({ 'ok': True })
 
 class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = NotificationSerializer

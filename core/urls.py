@@ -4,7 +4,7 @@ from .views import (
     RegisterView, PhoneTokenObtainPairView, MeView,
     IdeaConfigurationViewSet, ProjectViewSet, ListedProjectViewSet,
     WalletView, NotificationViewSet, PartnerViewSet, AnnouncementViewSet, ChangePasswordView, GenerateReferralView,
-    TelegramWebhookView,
+    TelegramWebhookView, RegisterTopupTelegramMessageView,
     ApproveTopupView, RejectTopupView,
 )
 
@@ -25,6 +25,7 @@ urlpatterns = [
     path('wallet/topup/', WalletView.as_view(), name='wallet_topup'),
     path('approve-topup/', ApproveTopupView.as_view(), name='approve_topup'),
     path('reject-topup/', RejectTopupView.as_view(), name='reject_topup'),
+    path('register-topup-message/', RegisterTopupTelegramMessageView.as_view(), name='register_topup_message'),
     path('telegram/webhook/', TelegramWebhookView.as_view(), name='telegram_webhook'),
     path('', include(router.urls)),
 ]
