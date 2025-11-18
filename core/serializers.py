@@ -121,6 +121,7 @@ class NotificationSerializer(serializers.ModelSerializer):
 class TopUpSerializer(serializers.Serializer):
     amount = serializers.DecimalField(max_digits=12, decimal_places=2)
     promo_code = serializers.CharField(required=False, allow_blank=True)
+    receipt = serializers.FileField(required=False, allow_empty_file=False)
 
     def validate(self, attrs):
         amount = attrs.get('amount')

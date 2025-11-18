@@ -106,3 +106,8 @@ CORS_ALLOWED_ORIGINS = [
     "http://142.93.174.235",
 ]
 CORS_ALLOW_ALL_ORIGINS = True
+
+# Telegram integration (defaults provided per user request; override via env in production)
+TELEGRAM_BOT_TOKEN = os.environ.get('8183514547:AAF_c52N2iu0hVeY7B6c2Oma4pmDbB8eHAs')
+# Note: Supergroup IDs usually start with -100. If your group ID differs, update accordingly.
+TELEGRAM_GROUP_ID = os.environ.get('-1003367409153')

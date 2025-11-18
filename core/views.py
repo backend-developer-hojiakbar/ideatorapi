@@ -1,12 +1,20 @@
 from decimal import Decimal
 import secrets
 from django.db import transaction
+from django.utils import timezone
+from django.conf import settings
+import requests
+import json
+import hmac
+import hashlib
 from rest_framework import generics, permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
+from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenObtainPairView
 
-from .models import User, IdeaConfiguration, Project, ListedProject, Notification, TopUpTransaction, Partner, Announcement
+from .models import User, IdeaConfiguration, Project, ListedProject, Notification, TopUpTransaction, Partner, Announcement, PromocodeUsage
 from .serializers import (
     RegisterSerializer, PhoneTokenObtainPairSerializer, UserSerializer,
     IdeaConfigurationSerializer, ProjectSerializer, ListedProjectSerializer,
@@ -152,8 +160,36 @@ class ListedProjectViewSet(viewsets.ModelViewSet):
         return Response(ser.data)
 
 
+def _approve_topup_transaction(tx: TopUpTransaction):
+    """Approve and activate a TopUpTransaction: credit balance and mark is_active, set activated_at, record promo usage, notify user."""
+    if tx.is_active:
+        return False
+    with transaction.atomic():
+        has_used = bool(tx.promo_code) and PromocodeUsage.objects.filter(user=tx.user, promocode=tx.promo_code).exists()
+        promo_bonus = Decimal(tx.promo_bonus) if tx.promo_code and not has_used else Decimal('0.00')
+        total = (Decimal(tx.amount) + Decimal(tx.cashback) + promo_bonus).quantize(Decimal('0.01'))
+        user = tx.user
+        user.balance = (Decimal(user.balance) + total).quantize(Decimal('0.01'))
+        user.save(update_fields=["balance"])
+        tx.is_active = True
+        tx.activated_at = timezone.now()
+        tx.save(update_fields=["is_active", "activated_at"])
+        if tx.promo_code and not has_used:
+            PromocodeUsage.objects.create(user=user, promocode=tx.promo_code)
+        Notification.objects.create(
+            user=user,
+            type='success',
+            title='Top-up approved',
+            message=f'+{tx.amount} qo\'shildi, +{tx.cashback} cashback, +{promo_bonus} promo. Balans yangilandi.'
+        )
+    return True
+
+
+
+
 class WalletView(generics.GenericAPIView):
     serializer_class = TopUpSerializer
+    parser_classes = (MultiPartParser, FormParser, JSONParser)
 
     def post(self, request):
         """Create a pending top-up transaction. Admin approval will credit balance with 1% cashback (+ optional promo bonus)."""
@@ -166,6 +202,7 @@ class WalletView(generics.GenericAPIView):
         promo_bonus = Decimal('0.00')
         if promo:
             promo_bonus = (amount * Decimal(promo.percent) / Decimal('100')).quantize(Decimal('0.01'))
+        receipt_file = ser.validated_data.get('receipt')
         with transaction.atomic():
             topup = TopUpTransaction.objects.create(
                 user=user,
@@ -173,7 +210,8 @@ class WalletView(generics.GenericAPIView):
                 cashback=cashback,
                 promo_code=promo if promo else None,
                 promo_bonus=promo_bonus,
-                is_active=False
+                is_active=False,
+                receipt=receipt_file if receipt_file else None,
             )
             message = f"{amount} so'm to'ldirish so'rovi yuborildi. Admin tasdiqlagach balansingizga +{amount} va +{cashback} cashback qo'shiladi."
             if promo:
@@ -184,7 +222,103 @@ class WalletView(generics.GenericAPIView):
                 title='Top-up requested',
                 message=message
             )
-        return Response({'transaction_id': topup.id, 'status': 'pending', 'amount': str(amount), 'cashback': str(cashback), 'promo_bonus': str(promo_bonus)})
+        # Telegram yuborish frontend orqali amalga oshiriladi
+        # Create approval token (HMAC) so frontend can build secure approve/reject URLs
+        secret = (settings.SECRET_KEY or 'secret').encode('utf-8')
+        msg = f"{topup.id}:{user.id}".encode('utf-8')
+        approve_token = hmac.new(secret, msg, hashlib.sha256).hexdigest()
+        return Response({
+            'transaction_id': topup.id,
+            'status': 'pending',
+            'amount': str(amount),
+            'cashback': str(cashback),
+            'promo_bonus': str(promo_bonus),
+            'approve_token': approve_token,
+        })
+
+
+class ApproveTopupView(generics.GenericAPIView):
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        txid = request.query_params.get('tx')
+        token = request.query_params.get('token', '')
+        if not txid or not token:
+            return Response({'ok': False, 'error': 'missing params'}, status=400)
+        try:
+            tx = TopUpTransaction.objects.select_related('user').get(id=int(txid))
+        except (TopUpTransaction.DoesNotExist, ValueError):
+            return Response({'ok': False, 'error': 'tx not found'}, status=404)
+        # validate HMAC
+        secret = (settings.SECRET_KEY or 'secret').encode('utf-8')
+        msg = f"{tx.id}:{tx.user_id}".encode('utf-8')
+        expected = hmac.new(secret, msg, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, token):
+            return Response({'ok': False, 'error': 'invalid token'}, status=403)
+        _approve_topup_transaction(tx)
+        return Response({'ok': True, 'status': 'approved'})
+
+
+class RejectTopupView(generics.GenericAPIView):
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        txid = request.query_params.get('tx')
+        token = request.query_params.get('token', '')
+        if not txid or not token:
+            return Response({'ok': False, 'error': 'missing params'}, status=400)
+        try:
+            tx = TopUpTransaction.objects.select_related('user').get(id=int(txid))
+        except (TopUpTransaction.DoesNotExist, ValueError):
+            return Response({'ok': False, 'error': 'tx not found'}, status=404)
+        # validate HMAC
+        secret = (settings.SECRET_KEY or 'secret').encode('utf-8')
+        msg = f"{tx.id}:{tx.user_id}".encode('utf-8')
+        expected = hmac.new(secret, msg, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, token):
+            return Response({'ok': False, 'error': 'invalid token'}, status=403)
+        # No state change, but respond OK
+        return Response({'ok': True, 'status': 'rejected'})
+
+
+class TelegramWebhookView(APIView):
+    permission_classes = [permissions.AllowAny]
+    parser_classes = (JSONParser,)
+
+    def post(self, request):
+        payload = request.data or {}
+        callback = payload.get('callback_query')
+        if not callback:
+            return Response({'ok': True})
+        data = callback.get('data') or ''
+        if ':' not in data:
+            return Response({'ok': True})
+        action, txid = data.split(':', 1)
+        try:
+            tx = TopUpTransaction.objects.select_related('user').get(id=int(txid))
+        except (TopUpTransaction.DoesNotExist, ValueError):
+            return Response({'ok': False, 'error': 'tx not found'})
+        token = getattr(settings, 'TELEGRAM_BOT_TOKEN', None)
+        chat_id = callback.get('message', {}).get('chat', {}).get('id')
+        api_url = f"https://api.telegram.org/bot{token}" if token else None
+        if action == 'approve':
+            changed = _approve_topup_transaction(tx)
+            if api_url and chat_id:
+                text = f"✅ Tasdiqlandi: Top-up #{tx.id} foydalanuvchi {tx.user.phone_number} uchun faollashtirildi."
+                try:
+                    requests.post(f"{api_url}/sendMessage", data={"chat_id": chat_id, "text": text}, timeout=10)
+                except Exception:
+                    pass
+            return Response({'ok': True, 'status': 'approved'})
+        elif action == 'reject':
+            if api_url and chat_id:
+                text = f"❌ Rad etildi: Top-up #{tx.id}"
+                try:
+                    requests.post(f"{api_url}/sendMessage", data={"chat_id": chat_id, "text": text}, timeout=10)
+                except Exception:
+                    pass
+            return Response({'ok': True, 'status': 'rejected'})
+        return Response({'ok': True})
 
 
 class NotificationViewSet(viewsets.ReadOnlyModelViewSet):

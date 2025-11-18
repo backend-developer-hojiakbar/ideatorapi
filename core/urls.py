@@ -3,7 +3,9 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     RegisterView, PhoneTokenObtainPairView, MeView,
     IdeaConfigurationViewSet, ProjectViewSet, ListedProjectViewSet,
-    WalletView, NotificationViewSet, PartnerViewSet, AnnouncementViewSet, ChangePasswordView, GenerateReferralView
+    WalletView, NotificationViewSet, PartnerViewSet, AnnouncementViewSet, ChangePasswordView, GenerateReferralView,
+    TelegramWebhookView,
+    ApproveTopupView, RejectTopupView,
 )
 
 router = DefaultRouter()
@@ -21,5 +23,8 @@ urlpatterns = [
     path('auth/change-password/', ChangePasswordView.as_view(), name='change_password'),
     path('auth/generate-referral/', GenerateReferralView.as_view(), name='generate_referral'),
     path('wallet/topup/', WalletView.as_view(), name='wallet_topup'),
+    path('approve-topup/', ApproveTopupView.as_view(), name='approve_topup'),
+    path('reject-topup/', RejectTopupView.as_view(), name='reject_topup'),
+    path('telegram/webhook/', TelegramWebhookView.as_view(), name='telegram_webhook'),
     path('', include(router.urls)),
 ]
