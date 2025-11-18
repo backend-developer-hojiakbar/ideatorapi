@@ -13,6 +13,8 @@ from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenObtainPairView
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_exempt
 
 from .models import User, IdeaConfiguration, Project, ListedProject, Notification, TopUpTransaction, Partner, Announcement, PromocodeUsage
 from .serializers import (
@@ -281,6 +283,7 @@ class RejectTopupView(generics.GenericAPIView):
         return Response({'ok': True, 'status': 'rejected'})
 
 
+@method_decorator(csrf_exempt, name='dispatch')
 class TelegramWebhookView(APIView):
     permission_classes = [permissions.AllowAny]
     parser_classes = (JSONParser,)
